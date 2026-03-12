@@ -1,18 +1,20 @@
 import streamlit as st
 import google.generativeai as genai
 
-# 1. 배경 설정 (깔끔한 디자인)
+# 디자인 설정
 st.set_page_config(page_title="AI 수학 문제 생성기", layout="centered")
 
-# 2. 보안 설정: API 키를 안전하게 가져오기 (나중에 설정창에 입력할 값)
+# API 키 연결 확인
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+    # Secrets에서 키를 가져올 때 앞뒤 공백을 제거(.strip())해서 혹시 모를 실수를 방지합니다.
+    raw_key = st.secrets["GOOGLE_API_KEY"]
+    api_key = raw_key.strip().replace('"', '').replace("'", "")
     genai.configure(api_key=api_key)
-except:
-    st.warning("⚠️ API 키가 설정되지 않았습니다. 관리자 페이지에서 설정해주세요.")
+except Exception as e:
+    st.error(f"⚠️ API 키를 설정하는 중 오류가 발생했습니다: {e}")
     st.stop()
 
-# 3. 데이터 설정 (2022 개정 교육과정)
+# 2022 개정 교육과정 데이터
 curriculum = {
     "중학교 1학년": ["소수와 합성수", "정수와 유리수", "문자와 식", "좌표평면과 그래프"],
     "중학교 2학년": ["유리수와 순환소수", "식의 계산", "부등식", "연립방정식", "함수"],
@@ -21,9 +23,8 @@ curriculum = {
     "고등학교 2/3학년(선택)": ["대수", "미적분I", "확률과 통계", "기하"]
 }
 
-# 4. 화면 구성 (심플하게)
 st.title("🧮 AI 수학 문제 생성기")
-st.caption("2022 개정 교육과정을 준수합니다.")
+st.caption("2022 개정 교육과정 완벽 반영")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -34,22 +35,22 @@ with col2:
 diff = st.select_slider("난이도", options=["하", "중", "상"])
 q_type = st.radio("문제 유형", ["객관식", "단답형", "서술형"], horizontal=True)
 
-# 5. 문제 생성 버튼 로직
 if st.button("✨ 문제 생성하기", use_container_width=True):
-    model = genai.GenerativeModel('models/gemini-1.5-flash')
-    
-    # AI에게 보낼 정교한 지시문(프롬프트)
-    prompt = f"""
-    너는 대한민국 수학교사야. 2022 개정 교육과정의 {grade} {unit} 단원에서 문제를 출제해줘.
-    - 난이도: {diff}
-    - 유형: {q_type}
-    - 조건: 문제와 함께 상세한 풀이 과정, 정답을 포함해줘. 수학 기호는 LaTeX 형식을 사용해줘.
-    """
-    
     with st.spinner('AI가 문제를 출제 중입니다...'):
-        response = model.generate_content(prompt)
-        st.success("문제 생성 완료!")
-        st.markdown("---")
-        st.markdown(response.text)
-
-
+        try:
+            # [수정 포인트] 가장 안정적인 모델 이름을 직접 명시
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            
+            prompt = f"대한민국 수학교사로서 2022 개정 교육과정 {grade} {unit} 단원의 문제를 {diff} 난이도로 {q_type} 형태로 출제해줘. 풀이와 정답도 포함해."
+            
+            response = model.generate_content(prompt)
+            st.success("문제 생성 완료!")
+            st.markdown("---")
+            st.markdown(response.text)
+            
+        except Exception as e:
+            # 에러가 나면 어떤 모델을 쓸 수 있는지 리스트를 보여줍니다 (진단용)
+            st.error(f"❌ 에러 발생: {e}")
+            st.info("사용 가능한 모델 리스트를 확인해 보세요:")
+            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
+            st.write(models)
