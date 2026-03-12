@@ -36,7 +36,7 @@ q_type = st.radio("문제 유형", ["객관식", "단답형", "서술형"], hori
 
 # 5. 문제 생성 버튼 로직
 if st.button("✨ 문제 생성하기", use_container_width=True):
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash-latest')
     
     # AI에게 보낼 정교한 지시문(프롬프트)
     prompt = f"""
@@ -51,3 +51,4 @@ if st.button("✨ 문제 생성하기", use_container_width=True):
         st.success("문제 생성 완료!")
         st.markdown("---")
         st.markdown(response.text)
+
