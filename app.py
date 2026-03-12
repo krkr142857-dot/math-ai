@@ -25,7 +25,7 @@ except Exception as e:
     st.error(f"⚠️ API 키 연결 실패: {e}")
     st.stop()
 
-# 3. 세션 상태 관리
+# 3. 세션 상태 관리 (초기 설정)
 if 'problem_data' not in st.session_state: st.session_state.problem_data = None
 if 'user_answer' not in st.session_state: st.session_state.user_answer = ""
 if 'grade_status' not in st.session_state: st.session_state.grade_status = None
@@ -52,15 +52,14 @@ with st.sidebar:
     if st.button("✨ 새 문제 생성", type="primary"):
         with st.spinner('AI가 단원 성취기준을 분석하여 출제 중...'):
             try:
+                # 사용 가능한 모델 탐색
                 model_list = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-                target_model = next((m for m in model_list if "gemini-1.5-flash" in m), 
-                               next((m for m in model_list if "flash" in m), 
-                               model_list[0] if model_list else ""))
+                target_model_name = next((m for m in model_list if "gemini-1.5-flash" in m), model_list[0])
                 
-                model = genai.GenerativeModel(target_model)
+                model = genai.GenerativeModel(target_model_name)
                 prompt = f"""
                 수학교사로서 2022 개정 교육과정 {sel_grade} {sel_unit} 단원의 문제를 {sel_diff} 수준에 맞춰 {sel_type}으로 출제해.
-                수식은 LaTeX($)를 사용해. 반드시 아래 JSON 형식으로만 답변해. 다른 말은 하지 마.
+                수식은 LaTeX($)를 사용해. 반드시 아래 JSON 형식으로만 답변해. 다른 말은 절대 하지 마.
                 {{
                     "problem": "문제 내용",
                     "options": ["객관식일 때만 5개 항목, 아니면 빈 리스트"],
@@ -72,8 +71,12 @@ with st.sidebar:
                 json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
                 if json_match:
                     st.session_state.problem_data = json.loads(json_match.group())
-                    st.session_state.user_answer = ""; st.session_state.grade_status = None; st.session_state.ai_feedback = ""
-                else: st.error("AI 응답 형식 오류. 다시 시도해 주세요.")
+                    # [중요] 새 문제 생성 시 모든 상태 초기화
+                    st.session_state.user_answer = ""
+                    st.session_state.grade_status = None
+                    st.session_state.ai_feedback = ""
+                else: 
+                    st.error("AI 응답 형식 오류. 다시 시도해 주세요.")
             except Exception as e:
                 st.error(f"❌ 출제 오류: {e}")
 
@@ -85,7 +88,7 @@ if st.session_state.problem_data:
     with col2: # [2분할: 문제 및 입력]
         st.subheader("📝 문제")
         
-        # 채점 이펙트 (오타 수정된 부분)
+        # 채점 이펙트
         if st.session_state.grade_status == "correct": 
             st.markdown('<div class="correct-circle">○</div>', unsafe_allow_html=True)
         elif st.session_state.grade_status == "wrong": 
@@ -95,7 +98,17 @@ if st.session_state.problem_data:
         st.write("---")
 
         if sel_type == "객관식":
-            st.session_state.user_answer = st.radio("정답 선택", p['options'], index=None if st.session_state.user_answer == "" else p['options'].index(st.session_state.user_answer))
+            # [수정된 부분] ValueError 방지용 인덱스 계산 로직
+            options_list = p.get('options', [])
+            current_ans = st.session_state.user_answer
+            
+            # 현재 답변이 보기 리스트에 없으면 선택 안 함(None) 처리
+            try:
+                ans_index = options_list.index(current_ans) if current_ans in options_list else None
+            except:
+                ans_index = None
+                
+            st.session_state.user_answer = st.radio("정답 선택", options_list, index=ans_index)
         else:
             st.write("🎹 수학 기호 도우미")
             m_cols = st.columns(6)
@@ -108,10 +121,11 @@ if st.session_state.problem_data:
         c1, c2 = st.columns(2)
         if c1.button("✅ 제출 및 채점"):
             if sel_type == "객관식":
-                st.session_state.grade_status = "correct" if st.session_state.user_answer == p['answer'] or st.session_state.user_answer in p['answer'] else "wrong"
+                # 객관식은 텍스트가 정답과 정확히 일치하는지 확인
+                st.session_state.grade_status = "correct" if st.session_state.user_answer == p['answer'] else "wrong"
             else:
                 with st.spinner('AI 채점 중...'):
-                    # 모델 이름을 다시 찾아와서 사용
+                    # 채점용 모델 연결
                     model_list_inner = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
                     target_model_inner = next((m for m in model_list_inner if "gemini-1.5-flash" in m), model_list_inner[0])
                     judge_model = genai.GenerativeModel(target_model_inner)
