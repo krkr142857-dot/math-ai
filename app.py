@@ -1,20 +1,19 @@
 import streamlit as st
 import google.generativeai as genai
 
-# 디자인 설정
+# 1. 디자인 설정
 st.set_page_config(page_title="AI 수학 문제 생성기", layout="centered")
 
-# API 키 연결 확인
+# 2. API 키 연결 (공백이나 따옴표 실수 방지 로직 강화)
 try:
-    # Secrets에서 키를 가져올 때 앞뒤 공백을 제거(.strip())해서 혹시 모를 실수를 방지합니다.
     raw_key = st.secrets["GOOGLE_API_KEY"]
     api_key = raw_key.strip().replace('"', '').replace("'", "")
     genai.configure(api_key=api_key)
 except Exception as e:
-    st.error(f"⚠️ API 키를 설정하는 중 오류가 발생했습니다: {e}")
+    st.error(f"⚠️ API 키 설정 오류: {e}")
     st.stop()
 
-# 2022 개정 교육과정 데이터
+# 3. 데이터 설정
 curriculum = {
     "중학교 1학년": ["소수와 합성수", "정수와 유리수", "문자와 식", "좌표평면과 그래프"],
     "중학교 2학년": ["유리수와 순환소수", "식의 계산", "부등식", "연립방정식", "함수"],
@@ -24,7 +23,7 @@ curriculum = {
 }
 
 st.title("🧮 AI 수학 문제 생성기")
-st.caption("2022 개정 교육과정 완벽 반영")
+st.caption("2022 개정 교육과정 기반")
 
 col1, col2 = st.columns(2)
 with col1:
@@ -35,22 +34,38 @@ with col2:
 diff = st.select_slider("난이도", options=["하", "중", "상"])
 q_type = st.radio("문제 유형", ["객관식", "단답형", "서술형"], horizontal=True)
 
+# 4. 문제 생성 로직
 if st.button("✨ 문제 생성하기", use_container_width=True):
-    with st.spinner('AI가 문제를 출제 중입니다...'):
+    with st.spinner('AI 모델을 확인하고 문제를 생성 중입니다...'):
         try:
-            # [수정 포인트] 가장 안정적인 모델 이름을 직접 명시
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            # [핵심] 내 계정에서 사용 가능한 모델 중 'gemini'가 들어간 첫 번째 모델을 자동으로 찾습니다.
+            available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
             
-            prompt = f"대한민국 수학교사로서 2022 개정 교육과정 {grade} {unit} 단원의 문제를 {diff} 난이도로 {q_type} 형태로 출제해줘. 풀이와 정답도 포함해."
+            # 우선순위: 1.5-flash -> 1.5-pro -> 리스트의 첫 번째 모델
+            target_model = ""
+            for m_name in available_models:
+                if "gemini-1.5-flash" in m_name:
+                    target_model = m_name
+                    break
             
-            response = model.generate_content(prompt)
-            st.success("문제 생성 완료!")
-            st.markdown("---")
-            st.markdown(response.text)
+            if not target_model:
+                for m_name in available_models:
+                    if "gemini" in m_name:
+                        target_model = m_name
+                        break
             
+            if not target_model:
+                st.error("사용 가능한 Gemini 모델을 찾을 수 없습니다.")
+            else:
+                # 선택된 모델로 문제 생성
+                model = genai.GenerativeModel(target_model)
+                prompt = f"대한민국 수학교사로서 2022 개정 교육과정 {grade} {unit} 단원의 문제를 {diff} 난이도로 {q_type} 형태로 출제해줘. 풀이와 정답도 포함해."
+                
+                response = model.generate_content(prompt)
+                st.success(f"성공! (사용 모델: {target_model})")
+                st.markdown("---")
+                st.markdown(response.text)
+                
         except Exception as e:
-            # 에러가 나면 어떤 모델을 쓸 수 있는지 리스트를 보여줍니다 (진단용)
-            st.error(f"❌ 에러 발생: {e}")
-            st.info("사용 가능한 모델 리스트를 확인해 보세요:")
-            models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-            st.write(models)
+            st.error(f"❌ 최종 에러 발생: {e}")
+            st.info("이 메시지가 계속 뜨면 API 키 자체의 문제일 가능성이 높습니다.")
