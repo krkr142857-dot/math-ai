@@ -1,220 +1,139 @@
 import streamlit as st
-import google.generativeai as genai
-import json
-import re
+import random
 
-# 1. 페이지 설정 (화면 너비 최대 활용)
-st.set_page_config(page_title="수학 문제 생성기", layout="wide")
+# 페이지 기본 설정
+st.set_page_config(page_title="고등학교 수학 문제 생성기", layout="wide")
 
-# 2. AI 모델 설정 및 문제 생성 로직
-def generate_math_problems(grade, unit, diff, q_type, count):
-    try:
-        api_key = st.secrets["GOOGLE_API_KEY"].strip().replace('"', '').replace("'", "")
-        genai.configure(api_key=api_key)
+# 캡스톤디자인 수학교육과 문제 은행 데이터 (예시 데이터 일부 포함, 필요시 확장)
+BANK = {
+    "고1": {
+        "다항식": {
+            2: [
+                {
+                    "type": ["객관식", "단답형", "서술형"],
+                    "q": "$(x+3)(x-5)$를 전개하면?",
+                    "choices": ["$x^2-2x-15$", "$x^2+2x-15$", "$x^2-2x+15$", "$x^2-8x-15$", "$x^2+8x+15$"],
+                    "ans": "$x^2-2x-15$",
+                    "sol": "$(x+a)(x+b)=x^2+(a+b)x+ab$에 $a=3,b=-5$ 대입\\n$\\Rightarrow x^2-2x-15$",
+                    "hints": ["$(x+a)(x+b)$ 공식 이용", "$a+b=-2$, $ab=-15$"]
+                },
+                {
+                    "type": ["객관식", "단답형", "서술형"],
+                    "q": "$(2x+1)(3x-2)$를 전개하면?",
+                    "choices": ["$6x^2-x-2$", "$6x^2+x-2$", "$6x^2-x+2$", "$5x^2-x-2$", "$6x^2+x+2$"],
+                    "ans": "$6x^2-x-2$",
+                    "sol": "분배법칙 전개: $6x^2-4x+3x-2=6x^2-x-2$",
+                    "hints": ["분배법칙으로 각 항을 전개", "$-4x+3x=-x$", "상수항은 $-2$"]
+                }
+            ],
+            3: [
+                {
+                    "type": ["객관식", "단답형", "서술형"],
+                    "q": "$(x+y)^3$을 전개하면?",
+                    "choices": ["$x^3+3x^2y+3xy^2+y^3$", "$x^3+y^3$", "$x^3-3x^2y+3xy^2-y^3$", "$x^3+2x^2y+2xy^2+y^3$", "$x^3+3xy+y^3$"],
+                    "ans": "$x^3+3x^2y+3xy^2+y^3$",
+                    "sol": "$(a+b)^3=a^3+3a^2b+3ab^2+b^3$에 대입",
+                    "hints": ["세제곱 전개 공식 이용", "계수는 1, 3, 3, 1"]
+                }
+            ]
+        }
+    },
+    "고2": {
+        "지수와 로그": {
+            1: [
+                {
+                    "type": ["객관식", "단답형", "서술형"],
+                    "q": "$2^3 \\times 2^4$의 값은?",
+                    "choices": ["$128$", "$2^{12}$", "$64$", "$2^{-1}$", "$12$"],
+                    "ans": "$128$",
+                    "sol": "$2^3 \\times 2^4 = 2^{3+4} = 2^7 = 128$",
+                    "hints": ["지수법칙: $a^m \\times a^n = a^{m+n}$", "$3+4=7$"]
+                }
+            ]
+        }
+    }
+}
+
+# 학년별 단원 매핑
+GRADE_UNITS = {
+    "고1": ["다항식", "방정식과 부등식", "인수분해", "나머지 정리"],
+    "고2": ["지수와 로그", "삼각함수", "수열", "함수의 극한과 미분", "적분"],
+    "고3": ["수열의 극한", "미분법", "확률과 통계"]
+}
+
+# 세션 상태 초기화 (문제 생성 후 화면 유지를 위함)
+if "generated_problems" not in st.session_state:
+    st.session_state.generated_problems = []
+
+def generate_problems(grade, sub, lv, q_type, count):
+    pool = []
+    if grade in BANK and sub in BANK[grade] and lv in BANK[grade][sub]:
+        pool = [p for p in BANK[grade][sub][lv] if q_type in p["type"]]
+    
+    if not pool:
+        return []
+    
+    # 요청한 수만큼 랜덤 추출 (중복 허용)
+    selected = random.choices(pool, k=count)
+    
+    formatted_problems = []
+    for p in selected:
+        prob_data = p.copy()
+        if q_type == "객관식" and "choices" in p:
+            choices = p["choices"].copy()
+            random.shuffle(choices)
+            prob_data["shuffled_choices"] = choices
+        formatted_problems.append(prob_data)
         
-        # 가용 모델 자동 탐색
-        model_list = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        target_model = next((m for m in model_list if "gemini-1.5-flash" in m), model_list[0])
-        model = genai.GenerativeModel(target_model)
-        
-        prompt = f"""
-        수학교사로서 {grade} {unit} 단원의 문제를 {diff} 수준으로 {q_type} {count}개를 출제해.
-        모든 수식은 반드시 LaTeX($)로 감싸고 역슬래시는 반드시 두 번(\\\\) 써서 출력해.
-        반드시 아래 JSON 리스트 형식으로만 답변해. 다른 설명은 하지마.
-        [
-            {{
-                "type": ["{q_type}"],
-                "q": "문제 내용 (라텍스 포함)",
-                "choices": ["보기1", "보기2", "보기3", "보기4", "보기5"],
-                "correct_idx": 0,
-                "answer": "정답(라텍스)",
-                "short_answer": "채점용텍스트",
-                "solution": "상세 풀이 과정",
-                "hints": ["힌트1", "힌트2", "힌트3"],
-                "terms": "핵심용어",
-                "standard": "성취기준"
-            }}
-        ]
-        """
-        response = model.generate_content(prompt)
-        # JSON 블록만 추출
-        match = re.search(r'\[.*\]', response.text, re.DOTALL)
-        if match:
-            return json.loads(match.group())
-        return None
-    except Exception as e:
-        st.error(f"AI 생성 실패: {e}")
-        return None
+    return formatted_problems
 
-# 3. 사이드바 UI (2022 개정 교육과정 기준)
+# 헤더 영역
+st.title("고등학교 수학 문제 생성기")
+st.caption("2022 개정 교육과정 · 수학교육과 캡스톤디자인")
+st.divider()
+
+# 사이드바 영역 (문제 설정)
 with st.sidebar:
-    st.markdown("### ⚙️ 문제 설정")
-    grade = st.selectbox("학년", ["중학교 1학년", "중학교 2학년", "중학교 3학년", "고등학교 1학년", "고등학교 2/3학년"])
-    unit = st.text_input("단원명", "다항식의 연산")
-    diff = st.select_slider("난이도", options=["7~9등급", "4~6등급", "2~3등급", "1등급"])
-    q_type = st.radio("문제 유형", ["객관식", "단답형", "서술형"])
-    count = st.number_input("문항 수", 1, 5, 3)
+    st.subheader("⚙ 문제 설정")
+    
+    selected_grade = st.radio("학년", ["고1", "고2", "고3"], horizontal=True)
+    selected_sub = st.selectbox("단원", GRADE_UNITS[selected_grade])
+    selected_lv = st.slider("난이도", min_value=1, max_value=5, value=2)
+    selected_type = st.radio("문제 유형", ["객관식", "단답형", "서술형"], horizontal=True)
+    selected_count = st.number_input("문항 수", min_value=1, max_value=5, value=3)
     
     if st.button("✦ 문제 생성하기", type="primary", use_container_width=True):
-        with st.spinner('AI가 문제를 출제하고 디자인을 입히는 중...'):
-            problems = generate_math_problems(grade, unit, diff, q_type, count)
-            if problems:
-                st.session_state.current_bank = problems
+        st.session_state.generated_problems = generate_problems(
+            selected_grade, selected_sub, selected_lv, selected_type, selected_count
+        )
 
-# 4. 메인 화면 구성 (질문자님 HTML 디자인 주입)
-if 'current_bank' in st.session_state:
-    # 파이썬 데이터를 자바스크립트 변수로 변환 (한글 깨짐 방지)
-    json_bank_data = json.dumps(st.session_state.current_bank, ensure_ascii=False)
-    
-    # 중괄호 문법 오류를 막기 위해 f-string을 쓰지 않고 문자열 치환(.replace) 사용
-    html_code = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="UTF-8"/>
-<title>수학 문제 생성기</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/contrib/auto-render.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;800&family=Noto+Serif+KR:wght@400;600&family=Caveat:wght@700&display=swap" rel="stylesheet"/>
-<style>
-/* CSS 스타일 완벽 이식 */
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-:root { --bg: #f5f6fa; --sidebar-bg: #ffffff; --card-bg: #ffffff; --border: #e5e7eb; --text: #111827; --accent: #4f46e5; --green: #16a34a; --red: #dc2626; }
-body { background: var(--bg); font-family: 'Noto Sans KR', sans-serif; color: var(--text); height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
-.workspace { flex: 1; display: flex; overflow: hidden; }
-.center-panel { flex: 1; overflow-y: auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 14px; }
-.right-panel { width: 370px; background: var(--sidebar-bg); border-left: 1px solid var(--border); overflow-y: auto; padding: 20px 18px; display: flex; flex-direction: column; gap: 14px; }
-.prob-card { background: var(--card-bg); border: 1.5px solid var(--border); border-radius: 14px; padding: 22px; cursor: pointer; position: relative; box-shadow: 0 1px 3px rgba(0,0,0,0.08); transition: border-color .15s; }
-.prob-card.selected { border-color: var(--accent); }
-.ox-stamp { position: absolute; top: 12px; left: 14px; font-family: 'Caveat', cursive; font-size: 50px; font-weight: 700; opacity: 0; pointer-events: none; }
-.ox-stamp.show-o { color: #e11d48; opacity: 1; }
-.ox-stamp.show-x { color: #e11d48; opacity: 1; }
-.card-q { font-family: 'Noto Serif KR', serif; font-size: 16px; line-height: 2.1; }
-.choice-opt { padding: 10px 14px; border-radius: 9px; cursor: pointer; border: 1.5px solid #f0f1f5; background: var(--bg); margin-top: 7px; transition: all .13s; }
-.choice-opt.picked { border-color: var(--accent); background: #ede9fe; }
-.choice-opt.revealed-correct { border-color: var(--green) !important; background: #f0fdf4 !important; color: var(--green); }
-.choice-opt.revealed-wrong { border-color: var(--red) !important; background: #fef2f2 !important; color: var(--red); }
-.hint-body, .ans-box, .sol-box { display: none; padding: 12px; border-radius: 8px; margin-top: 8px; font-size: 13.5px; }
-.hint-body.open, .ans-box.open, .sol-box.open { display: block; }
-.ans-box { background: #f0fdf4; border: 1px solid var(--green); color: var(--green); }
-.sol-box { background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; white-space: pre-wrap; line-height: 1.8; }
-.keypad { margin-top: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; border-top: 2px solid var(--accent); padding-top: 15px; }
-.k-btn { padding: 8px; font-size: 11px; background: #fff; border: 1px solid #ddd; border-radius: 5px; cursor: pointer; }
-</style>
-</head>
-<body>
-<header style="flex-shrink:0; background:#fff; border-bottom:1px solid var(--border); padding:0 24px; height:52px; display:flex; align-items:center; justify-content:space-between;">
-    <div style="display:flex; align-items:center; gap:10px;">
-        <div style="width:32px; height:32px; background:var(--accent); border-radius:8px; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:900;">∑</div>
-        <div style="font-weight:800; font-size:15px;">수학 문제 생성기</div>
-    </div>
-    <div style="font-size:11px; color:#6b7280; border:1px solid var(--border); border-radius:6px; padding:3px 10px; background:var(--bg);">수학교육과 캡스톤디자인</div>
-</header>
-<div class="workspace">
-    <div class="center-panel" id="centerPanel"></div>
-    <div class="right-panel">
-        <div id="rightPanelContents">
-            <div style="text-align:center; color:#9ca3af; padding-top:50px;">문제를 클릭하면<br>힌트·정답·풀이가 나옵니다</div>
-        </div>
-        <div class="keypad">
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\sqrt{}')">√</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\frac{}{}')">분수</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: ^n')">제곱</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\sin')">sin</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\lim')">lim</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\sum')">∑</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\int')">∫</button>
-            <button class="k-btn" onclick="alert('입력창에 붙여넣으세요: \\\\theta')">θ</button>
-        </div>
-    </div>
-</div>
-<script>
-const BANK = __AI_BANK_DATA__;
-const states = BANK.map(() => ({ picked: -1, submitted: false }));
-
-function renderProblems() {
-    const cp = document.getElementById('centerPanel');
-    cp.innerHTML = BANK.map((p, i) => `
-        <div class="prob-card" id="card-${i}" onclick="selectCard(${i})">
-            <div class="ox-stamp" id="stamp-${i}"></div>
-            <div style="font-size:10px; color:var(--accent); font-weight:700; margin-bottom:10px;">QUESTION ${i+1}</div>
-            <div class="card-q">${p.q}</div>
-            ${p.choices.length > 0 ? 
-                `<div style="margin-top:12px;">${p.choices.map((c, ci) => `
-                    <div class="choice-opt" id="opt-${i}-${ci}" onclick="pick(${i}, ${ci})">
-                        <span style="font-weight:700; margin-right:8px;">${ci+1}</span> ${c}
-                    </div>`).join('')}</div>` :
-                `<input type="text" id="input-${i}" style="width:100%; padding:12px; margin-top:15px; border:1px solid #ddd; border-radius:10px;" placeholder="정답을 입력하세요">`
-            }
-            <button onclick="submit(${i})" style="margin-top:20px; width:100%; padding:12px; background:var(--accent); color:white; border:none; border-radius:10px; cursor:pointer; font-weight:700;">채점하기</button>
-        </div>
-    `).join('');
-    renderMathInElement(cp, { delimiters: [{left: "$", right: "$", display: false}] });
-}
-
-window.selectCard = function(idx) {
-    document.querySelectorAll('.prob-card').forEach((c, i) => c.classList.toggle('selected', i === idx));
-    const p = BANK[idx];
-    document.getElementById('rightPanelContents').innerHTML = `
-        <div style="font-size:10px; color:var(--accent); font-weight:700; letter-spacing:1px;">💡 SOLUTION GUIDE</div>
-        <div style="margin-top:20px;">
-            <div style="font-size:12px; color:#666; font-weight:700;">HINT</div>
-            <div class="hint-body open">${p.hints[0]}</div>
-        </div>
-        <div style="margin-top:15px;">
-            <button onclick="this.nextElementSibling.classList.toggle('open')" style="width:100%; padding:10px; background:#f0fdf4; border:1px solid var(--green); color:var(--green); border-radius:8px; cursor:pointer; font-weight:700;">정답 확인</button>
-            <div class="ans-box">정답: ${p.answer}</div>
-        </div>
-        <div style="margin-top:10px;">
-            <button onclick="this.nextElementSibling.classList.toggle('open')" style="width:100%; padding:10px; background:#fffbeb; border:1px solid #fcd34d; color:#d97706; border-radius:8px; cursor:pointer; font-weight:700;">풀이 과정 보기</button>
-            <div class="sol-box">${p.solution}</div>
-        </div>
-        <div style="margin-top:15px; font-size:11px; color:#999; border-top:1px solid #eee; padding-top:10px;">
-            핵심 용어: ${p.terms}<br>성취기준: ${p.standard}
-        </div>
-    `;
-    renderMathInElement(document.getElementById('rightPanelContents'), { delimiters: [{left: "$", right: "$", display: false}] });
-}
-
-window.pick = function(pi, ci) {
-    if (states[pi].submitted) return;
-    states[pi].picked = ci;
-    document.querySelectorAll('#card-'+pi+' .choice-opt').forEach((o, i) => o.classList.toggle('picked', i === ci));
-}
-
-window.submit = function(idx) {
-    const p = BANK[idx];
-    const stamp = document.getElementById('stamp-'+idx);
-    let correct = false;
-    if (p.choices.length > 0) {
-        correct = (states[idx].picked === p.correct_idx);
-        document.querySelectorAll('#card-'+idx+' .choice-opt').forEach((o, i) => {
-            if (i === p.correct_idx) o.classList.add('revealed-correct');
-            else if (i === states[idx].picked) o.classList.add('revealed-wrong');
-        });
-    } else {
-        const val = document.getElementById('input-'+idx).value.replace(/\s/g,'').toLowerCase();
-        correct = (val === p.short_answer.replace(/\s/g,'').toLowerCase());
-    }
-    stamp.textContent = correct ? '○' : '✕';
-    stamp.className = 'ox-stamp ' + (correct ? 'show-o' : 'show-x');
-    states[idx].submitted = true;
-}
-
-renderProblems();
-</script>
-</body>
-</html>
-    """.replace("__AI_BANK_DATA__", json_bank_data) # f-string 대신 .replace()를 사용해 오류 원천 차단
-    
-    st.components.v1.html(html_code, height=900, scrolling=True)
-
+# 메인 패널 영역 (문제 출력)
+if not st.session_state.generated_problems:
+    st.info("왼쪽 사이드바에서 설정을 선택하고 '문제 생성하기' 버튼을 누르십시오.")
 else:
-    # 초기 안내 화면
-    st.markdown("""
-        <div style="text-align:center; padding-top:150px; color:#9ca3af; font-family:'Noto Sans KR';">
-            <h1 style="font-size:50px;">∑</h1>
-            <p style="font-size:15px;">왼쪽 사이드바에서 조건을 설정한 뒤<br><b>[문제 생성하기]</b> 버튼을 누르면 실시간 AI 출제가 시작됩니다.</p>
-        </div>
-    """, unsafe_allow_html=True)
+    st.success(f"{selected_grade} · {selected_sub} · Lv.{selected_lv} · {len(st.session_state.generated_problems)}문제 생성 완료")
+    
+    for i, prob in enumerate(st.session_state.generated_problems):
+        with st.container(border=True):
+            st.markdown(f"**문제 {i+1}**")
+            st.markdown(prob["q"])
+            
+            # 객관식 선지 렌더링
+            if selected_type == "객관식" and "shuffled_choices" in prob:
+                options = prob["shuffled_choices"]
+                user_ans = st.radio(f"문제 {i+1} 답안 선택", options, key=f"radio_{i}", index=None, label_visibility="collapsed")
+            
+            # 단답형/서술형 입력 창 렌더링
+            elif selected_type == "단답형":
+                user_ans = st.text_input(f"문제 {i+1} 정답 입력", key=f"text_{i}", placeholder="정답을 입력하십시오")
+            else:
+                user_ans = st.text_area(f"문제 {i+1} 풀이 입력", key=f"area_{i}", placeholder="풀이 과정을 서술하십시오")
+            
+            # 힌트 및 정답 확인 패널
+            with st.expander("💡 힌트 및 정답 보기"):
+                st.markdown("**힌트**")
+                for hint in prob.get("hints", []):
+                    st.markdown(f"- {hint}")
+                st.divider()
+                st.markdown(f"**정답:** {prob['ans']}")
+                st.markdown(f"**풀이:**\\n{prob.get('sol', '')}")
